@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Free Fire Flappy</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:100%;height:100%;overflow:hidden;font-family:'Arial',sans-serif;background:black;display:flex;justify-content:center;align-items:center;}
+.game-container{position:relative;width:100vw;height:100vh;overflow:hidden;}
+#game-canvas{display:block;width:100%;height:100%;}
+
+/* Loading screen */
+#loading-screen,#start-screen{
+  position:absolute;top:0;left:0;width:100%;height:100%;display:flex;justify-content:center;align-items:center;transition:opacity 0.5s;
+}
+#loading-screen{background:black;flex-direction:column;z-index:10;}
+#loading-image{max-width:80%;max-height:80%;display:block;}
+#start-screen{background:black;flex-direction:column;color:white;opacity:0;pointer-events:none;z-index:5;text-align:center;}
+#start-screen img{max-width:80%;max-height:60%;margin-bottom:20px;}
+#start-btn, #replay-btn{
+  background-color:#f8e71c;
+  color:#333;
+  border:none;
+  padding:12px 30px;
+  font-size:18px;
+  font-weight:bold;
+  border-radius:30px;
+  cursor:pointer;
+  box-shadow:0 4px 0 #d4b806;
+  transition: all 0.1s;
+  margin-top:10px;
+}
+#start-btn:hover, #replay-btn:hover{background-color:#ffef4d;transform:translateY(-2px);}
+#start-btn:active, #replay-btn:active{transform:translateY(2px);box-shadow:0 2px 0 #d4b806;}
+#score{position:absolute;top:10px;left:10px;font-size:28px;color:white;text-shadow:2px 2px 0 #000;z-index:5;}
+</style>
+</head>
+<body>
+<div class="game-container">
+    <canvas id="game-canvas"></canvas>
+    <div id="score">0</div>
+
+    <!-- Loading screen -->
+    <div id="loading-screen">
+        <img id="loading-image" src="looding.jpg" alt="Loading">
+    </div>
+
+    <!-- Start / Replay screen -->
+    <div id="start-screen">
+        <img src="play.jpg" alt="Play Screen">
+        <button id="start-btn">Play</button>
+        <button id="replay-btn" style="display:none;">Replay</button>
+    </div>
+</div>
+
+<script>
+// --- DOM ---
+const loadingScreen=document.getElementById('loading-screen');
+const startScreen=document.getElementById('start-screen');
+const startBtn=document.getElementById('start-btn');
+const replayBtn=document.getElementById('replay-btn');
+const canvas=document.getElementById('game-canvas');
+const ctx=canvas.getContext('2d');
+const scoreElement=document.getElementById('score');
+
+// --- Responsive canvas ---
+function resizeCanvas(){ canvas.width=window.innerWidth; canvas.height=window.innerHeight; }
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// --- Assets ---
+let birdImage=new Image(); birdImage.src='c.png';
+let bgImage=new Image(); bgImage.src='bg.jpg';
+let cloudImage=new Image(); cloudImage.src='cloud.webp';
+const flapSound=new Audio('jump.mp3');
+const scoreSound=new Audio('score.mp3');
+const bgSound=new Audio('bgs.mp3'); bgSound.loop=true; bgSound.volume=0.3;
+const gameOverSound=new Audio('gameover.mp3');
+
+// --- Preload assets and show start screen ---
+let assetsLoaded=0;
+[birdImage,bgImage,cloudImage].forEach(img=>{
+    img.onload=()=>{
+        assetsLoaded++;
+        if(assetsLoaded===3){
+            loadingScreen.style.opacity='0';
+            setTimeout(()=>{ loadingScreen.style.display='none'; startScreen.style.opacity='1'; startScreen.style.pointerEvents='auto'; },500);
+        }
+    }
+});
+
+// --- Game constants ---
+const GRAVITY=0.05,JUMP_FORCE=-2.5;
+const PIPE_SPEED=1.2,PIPE_WIDTH=70,PIPE_GAP=180,PIPE_INTERVAL=2000;
+
+// --- Game state ---
+let gameRunning=false,score=0;
+let bird={x:80,y:canvas.height/2,width:100,height:75,velocity:0};
+let pipes=[],lastPipeTime=0,animationId;
+let gasParticles=[],clouds=[];
+
+// --- Clouds ---
+for(let i=0;i<5;i++) clouds.push({x:Math.random()*canvas.width,y:Math.random()*100+20,speed:0.2+Math.random()*0.3});
+
+// --- Gas particles behind bird ---
+// --- Gas particles using squares ---
+// --- Gas particle creation ---
+function createGas(){
+    const particleCount = 8; // multiple particles for a puff
+    for(let i=0;i<particleCount;i++){
+        gasParticles.push({
+            x: bird.x + bird.width/2 - 8 + Math.random()*6, // near tail
+            y: bird.y + bird.height/2 - 2 + Math.random()*6,
+            radius: Math.random()*6 + 4,                   // size of puff
+            alpha: 0.7 + Math.random()*0.3,                // transparency
+            velocityX: -0.3 - Math.random()*0.3,           // slow backward drift
+            velocityY: -0.3 - Math.random()*0.5,           // upward movement
+            wiggle: Math.random()*0.5                        // horizontal wiggle
+        });
+    }
+}
+
+// --- Draw gas particles ---
+function drawGas(){
+    for(let i=gasParticles.length-1;i>=0;i--){
+        const p = gasParticles[i];
+        ctx.fillStyle = `rgba(255,255,255,${p.alpha})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius, 0, Math.PI*2);
+        ctx.fill();
+
+        // Movement
+        p.x += p.velocityX + Math.sin(p.wiggle) * 0.3; // wiggle horizontally
+        p.y += p.velocityY;
+        p.alpha -= 0.01; // fade out slowly
+        p.radius += 0.05; // slowly expand like gas spreading
+
+        if(p.alpha <= 0) gasParticles.splice(i,1);
+    }
+}
+
+
+
+// --- Play flap sound (clone for rapid taps) ---
+function playFlapSound(){
+    const s=flapSound.cloneNode();
+    s.currentTime=0;
+    s.play();
+}
+
+// --- Jump ---
+function jump(){
+    if(gameRunning){
+        bird.velocity=JUMP_FORCE;
+        playFlapSound();
+        createGas();
+    }
+}
+document.addEventListener('keydown',e=>{ if(e.code==='Space'){ jump(); e.preventDefault(); } });
+canvas.addEventListener('click',jump);
+canvas.addEventListener('touchstart',e=>{ e.preventDefault(); jump(); });
+
+// --- Start / Replay ---
+startBtn.addEventListener('click',()=>{ startScreen.style.display='none'; startGame(); });
+replayBtn.addEventListener('click',()=>{ replayBtn.style.display='none'; startScreen.style.display='none'; startGame(); });
+
+// --- Game functions ---
+function startGame(){
+    gameRunning=true;
+    score=0;
+    bird.y=canvas.height/2;
+    bird.velocity=0;
+    pipes=[];
+    lastPipeTime=0;
+    bgSound.currentTime=0;
+    bgSound.play();
+    if(animationId) cancelAnimationFrame(animationId);
+    gameLoop();
+}
+
+function gameLoop(timestamp){
+    if(!gameRunning) return;
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    updateBird();
+    updatePipes(timestamp);
+    updateClouds();
+
+    drawBackground();
+    drawClouds();
+    drawGas();
+    drawBird();
+    drawPipes();
+
+    scoreElement.textContent=score;
+
+    if(checkCollisions()){
+        gameOverSound.currentTime=0; gameOverSound.play();
+        gameRunning=false;
+        setTimeout(()=>{ replayBtn.style.display='block'; startScreen.style.display='flex'; },1000);
+        return;
+    }
+
+    animationId=requestAnimationFrame(gameLoop);
+}
+
+// --- Update functions ---
+function updateBird(){ bird.velocity+=GRAVITY; bird.y+=bird.velocity; if(bird.y<0){ bird.y=0; bird.velocity=0; } }
+
+function updatePipes(timestamp){
+    if(!lastPipeTime) lastPipeTime=timestamp;
+    if(timestamp-lastPipeTime>PIPE_INTERVAL){ createPipe(); lastPipeTime=timestamp; }
+    for(let i=pipes.length-1;i>=0;i--){
+        pipes[i].x-=PIPE_SPEED;
+        if(pipes[i].x+PIPE_WIDTH<0) pipes.splice(i,1);
+        if(!pipes[i].passed && pipes[i].x+PIPE_WIDTH<bird.x){
+            pipes[i].passed=true; score++; const s=scoreSound.cloneNode(); s.play();
+        }
+    }
+}
+function createPipe(){
+    const minTop=50,maxTop=canvas.height-PIPE_GAP-50;
+    const topHeight=Math.floor(Math.random()*(maxTop-minTop+1))+minTop;
+    pipes.push({x:canvas.width,topHeight:topHeight,passed:false});
+}
+function checkCollisions(){
+    if(bird.y+bird.height>canvas.height) return true;
+    const margin=5;
+    for(let pipe of pipes){
+        if(bird.x+bird.width-margin>pipe.x && bird.x+margin<pipe.x+PIPE_WIDTH){
+            if(bird.y+margin<pipe.topHeight || bird.y+bird.height-margin>pipe.topHeight+PIPE_GAP) return true;
+        }
+    }
+    return false;
+}
+
+// --- Draw functions ---
+function drawBackground(){ ctx.drawImage(bgImage,0,0,canvas.width,canvas.height); }
+function updateClouds(){ clouds.forEach(c=>{ c.x+=c.speed; if(c.x>canvas.width) c.x=-100; }); }
+function drawClouds(){ clouds.forEach(c=>{ ctx.drawImage(cloudImage,c.x,c.y,60,40); }); }
+function drawBird(){ ctx.save(); ctx.translate(bird.x+bird.width/2,bird.y+bird.height/2); ctx.rotate(bird.velocity*0.05); ctx.drawImage(birdImage,-bird.width/2,-bird.height/2,bird.width,bird.height); ctx.restore(); }
+function drawPipes(){ pipes.forEach(pipe=>{ ctx.fillStyle='#2ecc71'; ctx.fillRect(pipe.x,0,PIPE_WIDTH,pipe.topHeight); ctx.fillRect(pipe.x,pipe.topHeight+PIPE_GAP,PIPE_WIDTH,canvas.height-pipe.topHeight-PIPE_GAP); }); }
+</script>
+</body>
+</html>
